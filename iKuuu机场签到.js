@@ -2,7 +2,7 @@
 // @name         iKuuu机场签到
 // @namespace    https://github.com/biMid
 // @version      25.08.14
-// @description  每天iKuuu机场自动签到领流量，必须使用脚本猫，请勿使用油猴
+// @description  每天 iKuuu 自动签到领流量
 // @author       Vikrant、biMid
 // @match        https://docs.scriptcat.org/dev/background.html#promise
 // @crontab      * * once * *
@@ -13,80 +13,118 @@
 // ==/UserScript==
 
 return new Promise((resolve, reject) => {
-	let i = 0;
-	let j = 0;
-	GM_xmlhttpRequest({
-		method: "GET",
-		url: "https://ikuuu.ch/user",
-		onload: (xhr) => {
-			if (xhr.finalUrl == "https://ikuuu.ch/auth/login") {
-				GM_notification({
-					title: "iKuuu未登录！",
-					text: "请点击登陆后重新运行脚本",
-					onclick: (id) => {
-						GM_openInTab("https://ikuuu.ch/auth/login");
-						GM_closeNotification(id);
-					},
-					timeout: 10000,
-				});
-				clearInterval(scan);
-				reject("未登录");
-			} else if (xhr.finalUrl == "https://ikuuu.ch/user") {
-				//
-			} else {
-				clearInterval(scan);
-				reject("网页跳转向了一个未知的网址");
-			}
-		},
-	});
-	function main() {
-		setTimeout(() => {
-			GM_xmlhttpRequest({
-				method: "POST",
-				url: "https://ikuuu.ch/user/checkin",
-				responseType: "json",
-				timeout: 5000,
-				onload: (xhr) => {
-					let msg = xhr.response.msg;
-					if (xhr.status == 200) {
-						clearInterval(scan);
-						resolve(msg);
-					} else {
-						GM_log("请求失败，再试一次。", "info");
-						++i;
-						main();
-					}
-				},
-				ontimeout: () => {
-					GM_log("请求超时，再试一次。", "info");
-					++i;
-					main();
-				},
-				onabort: () => {
-					GM_log("请求终止，再试一次。", "info");
-					++i;
-					main();
-				},
-				onerror: () => {
-					GM_log("请求错误，再试一次。", "info");
-					++i;
-					main();
-				},
-			});
-		}, 1000 + Math.random() * 4000);
-	}
-	let scan = setInterval(() => {
-		++j;
-		if (i >= 7) {
-			GM_notification({
-				title: "出错超过七次，已退出脚本。",
-				text: "请检查问题并重新运行脚本。",
-			});
-			clearInterval(scan);
-			reject("出错超过七次，已退出脚本。");
-		} else if (j >= 32) {
-			reject("脚本运行超时");
-		}
-	}, 3000);
-	main();
+
+    const BASE_URL = "https://ikuuu.ch"; // 统一域名修改点
+    const URLS = {
+        user: `${BASE_URL}/user`,
+        login: `${BASE_URL}/auth/login`,
+        checkin: `${BASE_URL}/user/checkin`
+    };
+
+    const MAX_RETRY = 7;         // 签到失败重试次数
+    const MAX_RUN_TIME = 1000 * 100; // 最大运行时间（毫秒）
+    let retryCount = 0;
+    let finished = false;
+
+    // 总超时控制
+    const timeoutId = setTimeout(() => {
+        if (!finished) {
+            finished = true;
+            reject("脚本运行超时");
+        }
+    }, MAX_RUN_TIME);
+
+    // 统一弹通知
+    function notify(title, text, onclick) {
+        GM_notification({
+            title,
+            text,
+            timeout: 10000,
+            onclick: (id) => {
+                if (onclick) onclick();
+                GM_closeNotification(id);
+            }
+        });
+    }
+
+    // 统一的请求方法（带重试）
+    function retryRequest(options, stage) {
+        GM_xmlhttpRequest({
+            ...options,
+            onload: (xhr) => {
+                if (xhr.status === 200) {
+                    options.onsuccess && options.onsuccess(xhr);
+                } else {
+                    handleRetry(stage);
+                }
+            },
+            ontimeout: () => handleRetry(stage, "请求超时"),
+            onabort: () => handleRetry(stage, "请求被终止"),
+            onerror: () => handleRetry(stage, "请求出错")
+        });
+    }
+
+    function handleRetry(stage, reason = "请求失败") {
+        retryCount++;
+        GM_log(`[${stage}] ${reason}，第 ${retryCount} 次重试`, "info");
+        if (retryCount > MAX_RETRY) {
+            if (!finished) {
+                finished = true;
+                notify("签到失败", "出错超过七次，已退出脚本。");
+                reject("出错超过七次");
+            }
+        } else {
+            setTimeout(() => {
+                if (stage === "checkin") doCheckin();
+                else if (stage === "loginCheck") checkLogin();
+            }, 1000 + Math.random() * 3000);
+        }
+    }
+
+    // 检测是否已登录
+    function checkLogin() {
+        retryRequest({
+            method: "GET",
+            url: URLS.user,
+            onsuccess: (xhr) => {
+                if (xhr.finalUrl.includes(URLS.login)) {
+                    if (!finished) {
+                        finished = true;
+                        notify("iKuuu 未登录", "请登录后重新运行脚本", () => {
+                            GM_openInTab(URLS.login);
+                        });
+                        reject("未登录");
+                    }
+                } else if (xhr.finalUrl.includes(URLS.user)) {
+                    GM_log("检测到已登录，开始签到", "info");
+                    doCheckin();
+                } else {
+                    if (!finished) {
+                        finished = true;
+                        reject(`未知跳转地址: ${xhr.finalUrl}`);
+                    }
+                }
+            }
+        }, "loginCheck");
+    }
+
+    // 执行签到
+    function doCheckin() {
+        retryRequest({
+            method: "POST",
+            url: URLS.checkin,
+            responseType: "json",
+            timeout: 5000,
+            onsuccess: (xhr) => {
+                if (!finished) {
+                    finished = true;
+                    clearTimeout(timeoutId);
+                    resolve(xhr.response?.msg || "签到成功（无返回消息）");
+                }
+            }
+        }, "checkin");
+    }
+
+    // 启动
+    checkLogin();
 });
