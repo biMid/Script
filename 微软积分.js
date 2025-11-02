@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         微软积分
 // @namespace    https://github.com/geoisam
-// @version      25.08.01
+// @version      1.0.0(25.11.02)
 // @description  每天自动完成 Microsoft Rewards 任务获取积分奖励，✅必应搜索（Web）、✅每日活动（Web）、✅更多活动（Web）、✅文章阅读（App）、✅每日签到（App）
 // @author       geoisam@qq.com、biMid
-// @crontab      */20 * * * *
+// @crontab      */58 * * * *
 // @grant        unsafeWindow
 // @grant        GM_xmlhttpRequest
 // @grant        GM_notification
@@ -43,10 +43,10 @@ Config:
     span:
         title: 搜索间隔
         type: number
-        default: 60
-        min: 50
-        max: 300
-        unit: ±40秒
+        default: 600
+        min: 300
+        max: 3000
+        unit: ±200秒
     api:
         title: 搜索词接口（单机模式为随机汉字组句）
         type: select
@@ -54,8 +54,13 @@ Config:
         values: [单机模式, hot.eray.cc, hot.baiwumm.com, hot.cnxiaobai.com, hot.zhusun.top, hot.imsyy.top, hot.nntool.cc]
 ==/UserConfig== */
 
-// 如需修改限制搜索的次数，请修改代码中obj.task.search.limit的值
+// Config
+var minTimeBeforeFirstSearch = 60  * 1000   // 在第一次搜索开始前，等待的最小时间，秒为单位
+var maxTimeBeforeFirstSearch = 600 * 1000   // 在第一次搜索开始前，等待的最大时间，秒为单位
+var timeBetweenSearch        = 200 * 1000   // 相邻搜索，等待的时间，秒为单位，[-200s,+200s]
 
+
+// 如需修改限制搜索的次数，请修改代码中obj.task.search.limit的值
 const obj = {
     data: {
         time: {
@@ -146,7 +151,7 @@ const obj = {
             },
             limit: { // 限制搜索次数
                 min: 1,
-                max: 3
+                max: 7
             },
             index: 0,
             end: 0,
@@ -241,7 +246,8 @@ obj.getCode = function (url) {
             url: url,
             onload(xhr) {
                 const finalUrl = xhr.finalUrl
-                const code = finalUrl.match(/M\.[\w+\.]+(\-\w+){4}/)
+                // const code = finalUrl.match(/M\.[\w+\.]+(\-\w+){4}/)
+                const code = finalUrl.match(/M\.[\w+.]+(-\w+){4}/)
                 if (code) {
                     resolve(code[0])
                 } else {
@@ -329,7 +335,8 @@ obj.getRewardsInfo = function () {
             onload(xhr) {
                 if (xhr.status == 200) {
                     let res = xhr.responseText
-                    const data = res.match(/(\"dashboard\"?)/)
+                    // const data = res.match(/(\"dashboard\"?)/)
+                    const data = res.match(/("dashboard"?)/)
                     if (data && data[0]) {
                         res = JSON.parse(res)
                         resolve(res.dashboard)
@@ -662,13 +669,13 @@ obj.taskSearch = async function () {
             if (GM_getValue("Config.limit", true) == true) {
                 if (obj.task.search.index > obj.task.search.limit.index) {
                     obj.task.search.end++
-                    GM_log(`微软积分商城必应搜索🔵您已开启限制搜索，本次运行搜索 ${obj.task.search.index} 次结束！电脑搜索：${obj.task.search.pc.progress}/${obj.task.search.pc.max}　移动设备搜索：${obj.task.search.m.progress}/${obj.task.search.m.max}，请等待下个时间点继续完成！`)
+                    GM_log(`微软积分商城必应搜索🔵您已开启限制搜索，本次运行搜索 ${obj.task.search.index} 次结束！电脑搜索：${obj.task.search.pc.progress}/${obj.task.search.pc.max}移动设备搜索：${obj.task.search.m.progress}/${obj.task.search.m.max}，请等待下个时间点继续完成！`)
                     return true
                 }
             } else {
                 if (obj.task.search.times > 2) {
                     obj.task.search.end++
-                    GM_log(`微软积分商城必应搜索🔵您的积分收入限制！本次运行共搜索 ${obj.task.search.index} 次！电脑搜索：${obj.task.search.pc.progress}/${obj.task.search.pc.max}　移动设备搜索：${obj.task.search.m.progress}/${obj.task.search.m.max}，请等待下个时间点继续完成！`)
+                    GM_log(`微软积分商城必应搜索🔵您的积分收入限制！本次运行共搜索 ${obj.task.search.index} 次！电脑搜索：${obj.task.search.pc.progress}/${obj.task.search.pc.max}移动设备搜索：${obj.task.search.m.progress}/${obj.task.search.m.max}，请等待下个时间点继续完成！`)
                     return true
                 }
                 if (dashboard.userStatus.counters.dailyPoint[0].pointProgress == obj.task.search.progressNow) {
@@ -681,7 +688,7 @@ obj.taskSearch = async function () {
             if (obj.task.search.pc.progress >= obj.task.search.pc.max && obj.task.search.m.progress >= obj.task.search.m.max) {
                 obj.task.search.end++
                 if (GM_getValue("task_search", 0) != obj.data.time.dateNowNum) { // 已经完成任务，但是日期记录还是昨天
-                    obj.pushMsg("必应搜索🟢", `哇！哥哥好棒！必应搜索完成了！`)     // 没有更新至今天，即今天第一次完成，需要通知
+                    obj.pushMsg("必应搜索🟢", `必应搜索完成了！`)     // 没有更新至今天，即今天第一次完成，需要通知
                 }
                 GM_setValue("task_search", obj.data.time.dateNowNum) // 更新到今天
                 return true
@@ -717,6 +724,21 @@ obj.taskSearch = async function () {
     }
 }
 
+/**
+ * 等待随机时间
+ * @param {number} minMs - 最小等待时间(毫秒)
+ * @param {number} maxMs - 最大等待时间(毫秒)
+ * @returns {Promise} 在随机时间后resolve的Promise
+ */
+function waitRandomTime(minMs = 60*1000, maxMs = 600*1000) {
+    // 生成minMs到maxMs之间的随机毫秒数
+    const randomMs = Math.floor(Math.random() * (maxMs - minMs + 1)) + minMs;
+    
+    // 返回一个Promise，在随机时间后resolve
+    return new Promise(resolve => {
+        setTimeout(resolve, randomMs);
+    });
+}
 
 return new Promise((resolve, reject) => {
     obj.beforeStart()
@@ -751,9 +773,10 @@ return new Promise((resolve, reject) => {
     }
     obj.searchStart = async function () {
         try {
+            await waitRandomTime(minTimeBeforeFirstSearch, maxTimeBeforeFirstSearch); // 在第一次搜索开始前，等待随机时间
             const result = await obj.taskSearch()
-            const timespan = GM_getValue("Config.span", 60) * 1000
-            result ? obj.taskEnd() : setTimeout(() => { obj.searchStart() }, obj.getScopeRandomNum(timespan - 40000, timespan + 40000))
+            const timespan = GM_getValue("Config.span", 600) * 1000
+            result ? obj.taskEnd() : setTimeout(() => { obj.searchStart() }, obj.getScopeRandomNum(timespan - timeBetweenSearch, timespan + timeBetweenSearch))
         } catch (e) {
             reject(e)
         }
